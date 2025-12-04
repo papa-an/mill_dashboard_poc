@@ -1899,8 +1899,8 @@ function renderAIRecommendations(data, avgOer, status) {
     }
 
     // AI Recommendations
-    const recContainer = document.getElementById('ai-recommendations');
-    if (!recContainer) return;
+    const recBody = document.getElementById('ai-recommendations-body');
+    if (!recBody) return;
 
     let recommendations = '';
 
@@ -1956,5 +1956,196 @@ function renderAIRecommendations(data, avgOer, status) {
         `;
     }
 
-    recContainer.innerHTML = recommendations;
+    recBody.innerHTML = recommendations;
+    const performerData = renderMillPerformanceTables(data);
+    if (performerData) {
+        renderKeyInsights(performerData.topStats, performerData.bottomStats);
+    }
+}
+
+const AI_PERFORMANCE_TARGET_OER = 23;
+const AI_PERFORMANCE_MAX_ROWS = 5;
+
+function renderMillPerformanceTables(data) {
+    const recentData = getRecentMonthsRecords(data, 12);
+    const stats = buildEstateOerStats(recentData);
+    const topStats = renderPerformersTable(stats, 'ai-top-performers-body', (a, b) => b.avgOer - a.avgOer);
+    const bottomStats = renderPerformersTable(stats, 'ai-bottom-performers-body', (a, b) => a.avgOer - b.avgOer);
+    return { topStats, bottomStats };
+}
+
+function getRecentMonthsRecords(records, months = 12) {
+    const monthKeys = [...new Set(
+        records
+            .map(r => (r.date ? r.date.substring(0, 7) : null))
+            .filter(Boolean)
+    )]
+        .sort((a, b) => new Date(`${a}-01`) - new Date(`${b}-01`));
+
+    if (!monthKeys.length) return [];
+    const selected = monthKeys.slice(-months);
+    return records.filter(r => {
+        if (!r.date) return false;
+        return selected.includes(r.date.substring(0, 7));
+    });
+}
+
+function buildEstateOerStats(records) {
+    const map = {};
+    records.forEach(rec => {
+        if (!rec || !rec.estate || rec.oer_after == null || rec.oer_after === 0) return;
+        const key = rec.estate;
+        if (!map[key]) {
+            map[key] = {
+                estate: rec.estate,
+                oerSum: 0,
+                oerCount: 0,
+                maxOer: -Infinity,
+                fruitMonths: 0,
+                fruitTotals: { inti: 0, plasma: 0, p3: 0 }
+            };
+        }
+        const entry = map[key];
+        entry.oerSum += rec.oer_after;
+        entry.oerCount += 1;
+        if (rec.oer_after > entry.maxOer) entry.maxOer = rec.oer_after;
+
+        const hasFruit = rec.fruit_inti != null || rec.fruit_plasma != null || rec.fruit_3p != null;
+        if (hasFruit) {
+            entry.fruitMonths += 1;
+            entry.fruitTotals.inti += rec.fruit_inti || 0;
+            entry.fruitTotals.plasma += rec.fruit_plasma || 0;
+            entry.fruitTotals.p3 += rec.fruit_3p || 0;
+        }
+    });
+
+    return Object.values(map).map(entry => {
+        if (!entry.oerCount) return null;
+        const avgOer = entry.oerSum / entry.oerCount;
+        const maxOer = entry.maxOer === -Infinity ? null : entry.maxOer;
+        const fruitMonths = entry.fruitMonths;
+        const avgInti = fruitMonths ? entry.fruitTotals.inti / fruitMonths : 0;
+        const avgPlasma = fruitMonths ? entry.fruitTotals.plasma / fruitMonths : 0;
+        const avg3P = fruitMonths ? entry.fruitTotals.p3 / fruitMonths : 0;
+
+        const fruits = [
+            { name: 'Inti', value: avgInti },
+            { name: 'Plasma', value: avgPlasma },
+            { name: '3P', value: avg3P }
+        ];
+        const dominant = fruits.reduce((prev, current) => (current.value > prev.value ? current : prev));
+        const dominantFruit = dominant.value > 0 ? dominant.name : '-';
+        const dominantPct = dominant.value > 0 ? dominant.value * 100 : null;
+
+        const avgIntiPct = avgInti * 100;
+        const avgPlasmaPct = avgPlasma * 100;
+        const avg3PPct = avg3P * 100;
+
+        return {
+            estate: entry.estate,
+            avgOer,
+            gapToTarget: avgOer - AI_PERFORMANCE_TARGET_OER,
+            gapToTopMonth: maxOer != null ? maxOer - avgOer : null,
+            dominantFruit,
+            dominantFruitPct: dominantPct,
+            avgIntiPct,
+            avgPlasmaPct,
+            avg3PPct
+        };
+    }).filter(Boolean);
+}
+
+function renderPerformersTable(stats, elementId, comparator, limit = AI_PERFORMANCE_MAX_ROWS) {
+    const container = document.getElementById(elementId);
+    if (!container) return [];
+
+    if (!stats.length) {
+        container.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">Insufficient data in the selected period.</td></tr>';
+        return [];
+    }
+
+    const sorted = [...stats].sort(comparator).slice(0, limit);
+
+    container.innerHTML = sorted.map((row, index) => {
+        const avgOerText = `${row.avgOer.toFixed(2)}%`;
+        const targetGap = formatGap(row.gapToTarget);
+        const topGap = formatGap(row.gapToTopMonth);
+        const dominantPct = row.dominantFruitPct != null ? `${row.dominantFruitPct.toFixed(1)}%` : '-';
+
+        return `
+            <tr class="border-b border-slate-100 text-[11px] text-slate-600">
+                <td class="px-3 py-2 font-semibold text-slate-700">${index + 1}</td>
+                <td class="px-3 py-2 font-semibold text-slate-800">${row.estate}</td>
+                <td class="px-3 py-2 text-right font-bold text-slate-900">${avgOerText}</td>
+                <td class="px-3 py-2 text-right font-medium text-slate-700">${targetGap}</td>
+                <td class="px-3 py-2">${row.dominantFruit}</td>
+                <td class="px-3 py-2 text-right font-semibold text-slate-900">${dominantPct}</td>
+                <td class="px-3 py-2 text-right font-medium text-slate-700">${topGap}</td>
+            </tr>
+        `;
+    }).join('');
+
+    return sorted;
+}
+
+function renderKeyInsights(topStats = [], bottomStats = []) {
+    const container = document.getElementById('ai-key-insights-body');
+    if (!container) return;
+
+    if (!topStats.length || !bottomStats.length) {
+        container.innerHTML = '<p class="text-sm text-slate-500">Key insights populate after the workbook is processed.</p>';
+        return;
+    }
+
+    const topAvg = calculateAverageShares(topStats);
+    const bottomAvg = calculateAverageShares(bottomStats);
+    const insights = [];
+
+    const intiDelta = topAvg.inti - bottomAvg.inti;
+    if (intiDelta >= 2) {
+        insights.push(`Top performers maintain roughly ${topAvg.inti.toFixed(1)}% Inti vs ${bottomAvg.inti.toFixed(1)}% across the bottom group, reinforcing that higher Inti share tracks with stronger OER.`);
+    }
+
+    const plasmaDelta = bottomAvg.plasma - topAvg.plasma;
+    if (plasmaDelta >= 2) {
+        insights.push(`Bottom mills rely on ${bottomAvg.plasma.toFixed(1)}% Plasma compared to ${topAvg.plasma.toFixed(1)}% for leaders, suggesting Plasma quality or proportion can suppress OER when elevated.`);
+    }
+
+    const thirdPartyDelta = bottomAvg.p3 - topAvg.p3;
+    if (thirdPartyDelta >= 2) {
+        insights.push(`Higher 3P exposure (${bottomAvg.p3.toFixed(1)}% vs ${topAvg.p3.toFixed(1)}%) aligns with lower OER, so clamp down on 3P quality/quantity if you need gains.`);
+    }
+
+    if (!insights.length) {
+        insights.push('Top and bottom performers currently present similar fruit mix patterns; dig into processing losses or fruit quality signals for the next insight layer.');
+    }
+
+    container.innerHTML = `
+        <ul class="space-y-2 list-disc list-inside text-sm text-slate-600">
+            ${insights.map(item => `<li>${item}</li>`).join('')}
+        </ul>
+    `;
+}
+
+function calculateAverageShares(stats) {
+    if (!stats.length) return { inti: 0, plasma: 0, p3: 0 };
+    const aggregates = stats.reduce((acc, row) => {
+        acc.inti += typeof row.avgIntiPct === 'number' ? row.avgIntiPct : 0;
+        acc.plasma += typeof row.avgPlasmaPct === 'number' ? row.avgPlasmaPct : 0;
+        acc.p3 += typeof row.avg3PPct === 'number' ? row.avg3PPct : 0;
+        return acc;
+    }, { inti: 0, plasma: 0, p3: 0 });
+
+    const count = stats.length;
+    return {
+        inti: aggregates.inti / count,
+        plasma: aggregates.plasma / count,
+        p3: aggregates.p3 / count
+    };
+}
+
+function formatGap(value) {
+    if (value == null || Number.isNaN(value)) return '-';
+    const formatted = value.toFixed(2);
+    return `${value >= 0 ? '+' : ''}${formatted}%`;
 }
