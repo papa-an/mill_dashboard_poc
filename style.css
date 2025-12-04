@@ -19,6 +19,28 @@
     color: #0f766e;
 }
 
+.ai-table-section table {
+    margin: 0 auto;
+}
+
+.ai-table-section table th,
+.ai-table-section table td {
+    text-align: center;
+}
+
+/* Ensure layout fits narrower viewports */
+html,
+body {
+    width: 100%;
+    min-height: 100%;
+}
+
+main,
+#dashboard-content {
+    width: min(100%, 100vw);
+    margin: 0 auto;
+}
+
 /* Tab Transitions */
 .tab-content {
     animation: fadeIn 0.3s ease-in-out;
